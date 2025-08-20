@@ -1,171 +1,127 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from pymongo import MongoClient
-from bson import ObjectId
-import os
-from datetime import datetime
-from typing import Optional
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
-import logging
+import requests, os, jwt, datetime
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ----------------------------
+# 🔹 CONFIG
 
-app = FastAPI(
-    title="Women Safety App API",
-    description="Backend API for Shakti Women Safety App",
-    version="1.0.0"
-)
+from dotenv import load_dotenv
+load_dotenv()
 
-# Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to your frontend domains
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ----------------------------
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "<YOUR_GOOGLE_CLIENT_ID>")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "<YOUR_GOOGLE_CLIENT_SECRET>")
+REDIRECT_URI = "http://localhost:8000/auth/callback"
 
-# GZip compression for faster responses
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 
-# MongoDB connection with error handling
-try:
-    MONGODB_URI = os.getenv("MONGODB_URI")
-    if not MONGODB_URI:
-        raise ValueError("MONGODB_URI environment variable is required")
-    
-    client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-    db = client["women_safety_app"]
-    users_collection = db["users"]
-    
-    # Test connection
-    client.admin.command('ping')
-    logger.info("Successfully connected to MongoDB")
-except Exception as e:
-    logger.error(f"Failed to connect to MongoDB: {e}")
-    raise
+# ----------------------------
+# 🔹 INIT
+# ----------------------------
+app = FastAPI()
+client = MongoClient(MONGO_URI)
+db = client["women_safety_db"]
+users = db["users"]
 
-# Get Google Client ID from environment variable
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-if not GOOGLE_CLIENT_ID:
-    logger.warning("GOOGLE_CLIENT_ID environment variable is not set")
-
-# Models
+# ----------------------------
+# 🔹 MODELS
+# ----------------------------
 class User(BaseModel):
-    google_id: str
     email: str
     name: str
-    profile_picture: Optional[str] = None
-    created_at: datetime = datetime.utcnow()
-    last_login: Optional[datetime] = None
+    google_id: str
+    picture: str | None = None
 
-class GoogleSignInRequest(BaseModel):
-    id_token: str
+# ----------------------------
+# 🔹 UTILS
+# ----------------------------
+def create_jwt(user_id: str) -> str:
+    payload = {
+        "user_id": user_id,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
-# Helper function to verify Google ID token
-def verify_google_token(token: str):
+def verify_jwt(token: str):
     try:
-        if not GOOGLE_CLIENT_ID:
-            raise HTTPException(status_code=500, detail="Google authentication not configured")
-            
-        # Verify the token
-        id_info = id_token.verify_oauth2_token(
-            token, google_requests.Request(), GOOGLE_CLIENT_ID
-        )
-        
-        # Check if token is issued by Google
-        if id_info['iss'] not in ['accounts.google.com', 'https://accounts.google.com']:
-            raise ValueError('Wrong issuer.')
-            
-        return id_info
-    except ValueError as e:
-        logger.warning(f"Invalid Google token: {e}")
-        raise HTTPException(status_code=400, detail="Invalid Google token")
-    except Exception as e:
-        logger.error(f"Google token verification error: {e}")
-        raise HTTPException(status_code=500, detail="Authentication service error")
+        return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        return None
 
-# Routes
-@app.post("/api/auth/google")
-async def google_auth(request: GoogleSignInRequest):
-    try:
-        # Verify Google token
-        user_info = verify_google_token(request.id_token)
-        
-        # Extract user data
-        user_data = {
-            "google_id": user_info["sub"],
-            "email": user_info["email"],
-            "name": user_info.get("name", ""),
-            "profile_picture": user_info.get("picture"),
-            "last_login": datetime.utcnow()
-        }
-        
-        # Check if user already exists
-        existing_user = users_collection.find_one({"google_id": user_data["google_id"]})
-        
-        if existing_user:
-            # Update last login time
-            users_collection.update_one(
-                {"_id": existing_user["_id"]},
-                {"$set": {"last_login": datetime.utcnow()}}
-            )
-            # Convert ObjectId to string for JSON serialization
-            existing_user["_id"] = str(existing_user["_id"])
-            logger.info(f"User logged in: {user_data['email']}")
-            return {"message": "Login successful", "user": existing_user}
-        else:
-            # Create new user
-            user_data["created_at"] = datetime.utcnow()
-            result = users_collection.insert_one(user_data)
-            new_user = users_collection.find_one({"_id": result.inserted_id})
-            new_user["_id"] = str(new_user["_id"])
-            logger.info(f"New user created: {user_data['email']}")
-            return {"message": "User created successfully", "user": new_user}
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Authentication error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+def get_google_auth_url():
+    return (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_URI}"
+        "&response_type=code"
+        "&scope=openid%20email%20profile"
+    )
 
-@app.get("/api/users/{user_id}")
-async def get_user(user_id: str):
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-        if user:
-            user["_id"] = str(user["_id"])
-            return user
-        else:
-            raise HTTPException(status_code=404, detail="User not found")
-    except Exception as e:
-        logger.error(f"Get user error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+def exchange_code_for_token(code: str):
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": REDIRECT_URI,
+        "grant_type": "authorization_code"
+    }
+    response = requests.post(token_url, data=data)
+    return response.json()
 
+def get_google_user_info(access_token: str):
+    userinfo_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+    response = requests.get(userinfo_url, params={"access_token": access_token})
+    return response.json()
+
+# ----------------------------
+# 🔹 ROUTES
+# ----------------------------
 @app.get("/")
-async def root():
-    return {"message": "Women Safety App API is running", "status": "healthy"}
+def root():
+    return {"msg": "Women Safety API running"}
 
-@app.get("/health")
-async def health_check():
-    try:
-        # Check database connection
-        client.admin.command('ping')
-        return {"status": "healthy", "database": "connected"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+@app.get("/auth/login")
+def login():
+    """Step 1: Redirect user to Google OAuth"""
+    return RedirectResponse(get_google_auth_url())
+from fastapi.responses import RedirectResponse
+import urllib.parse, json
 
-# Add startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting Women Safety App API server")
+@app.get("/auth/callback")
+def callback(code: str):
+    token_data = exchange_code_for_token(code)
+    access_token = token_data.get("access_token")
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    user_info = get_google_user_info(access_token)
+
+    user = User(
+        email=user_info["email"],
+        name=user_info["name"],
+        google_id=user_info["id"],
+        picture=user_info.get("picture")
+    )
+
+    users.update_one({"email": user.email}, {"$set": user.dict()}, upsert=True)
+
+    jwt_token = create_jwt(user.google_id)
+
+    # Encode user info as JSON string for Flutter
+    user_json = json.dumps(user.dict())
+    params = {
+        "token": jwt_token,
+        "user": user_json
+    }
+    redirect_url = f"myapp://login?{urllib.parse.urlencode(params)}"
+    return RedirectResponse(redirect_url)
+
+@app.get("/protected")
+def protected(token: str):
+    """Step 3: Example of protected route"""
+    decoded = verify_jwt(token)
+    if not decoded:
+        return {"error": "Invalid or expired token"}
+    return {"msg": "Welcome to protected route!", "decoded": decoded}

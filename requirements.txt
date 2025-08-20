@@ -1,6 +1,9 @@
-fastapi==0.104.1
-uvicorn==0.24.0
-pymongo==4.6.0
-python-dotenv==1.0.0
+fastapi[all] 
+uvicorn 
+python-dotenv 
+passlib[bcrypt]
+python-jose[cryptography] 
+requests
+pymongo 
+motor
 google-auth==2.23.4
-requests==2.31.0
