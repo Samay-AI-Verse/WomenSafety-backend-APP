@@ -1,9 +1,8 @@
-fastapi[all] 
-uvicorn 
-python-dotenv 
-passlib[bcrypt]
-python-jose[cryptography] 
+fastapi
+uvicorn
+pymongo
 requests
-pymongo 
-motor
-google-auth==2.23.4
+python-dotenv
+PyJWT
+
+
