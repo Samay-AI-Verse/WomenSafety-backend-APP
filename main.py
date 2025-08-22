@@ -126,3 +126,13 @@ def protected(token: str):
     if not decoded:
         return {"error": "Invalid or expired token"}
     return {"msg": "Welcome to protected route!", "decoded": decoded}
+
+@app.get("/test-db")
+def test_db():
+    try:
+        count = users.count_documents({})
+        return {"msg": "MongoDB Connected ✅", "user_count": count}
+    except Exception as e:
+        return {"error": str(e)}
+
+
