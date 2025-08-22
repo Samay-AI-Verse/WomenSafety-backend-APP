@@ -17,7 +17,7 @@ REDIRECT_URI = "https://womensafety-backend-app.onrender.com/auth/callback"
 
 
 SECRET_KEY = os.getenv("SECRET_KEY", "supersecret")
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_URI = os.getenv("MONGO_URI")
 
 # ----------------------------
 # 🔹 INIT
