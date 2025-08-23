@@ -139,20 +139,22 @@ def callback(code: str):
 
 @app.post("/auth/login/mobile")
 def mobile_login(id_token: str):
-    """Handles login from the mobile app by receiving the ID token."""
+    """Handles login from the mobile app by receiving the Google ID token."""
     try:
-        user_info_url = "https://www.googleapis.com/oauth2/v3/tokeninfo"
-        response = requests.post(user_info_url, params={"id_token": id_token})
+        # Verify ID token with Google
+        user_info_url = "https://oauth2.googleapis.com/tokeninfo"
+        response = requests.get(user_info_url, params={"id_token": id_token})
         response.raise_for_status()
         user_info = response.json()
 
         user = User(
             email=user_info["email"],
-            name=user_info["name"],
+            name=user_info.get("name", ""),  # name may not always be in token
             google_id=user_info["sub"],
             picture=user_info.get("picture")
         )
 
+        # Create your own backend JWT (for protected routes)
         jwt_token = create_jwt(user.google_id)
 
         return JSONResponse(content={
