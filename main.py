@@ -163,3 +163,8 @@ def mobile_login(id_token: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid ID token or authentication error: {e}")
 
+from fastapi import Depends
+
+@app.get("/protected")
+def protected_route(token: str = Depends(verify_jwt)):
+    return {"message": "You are authenticated!", "user_id": token}
