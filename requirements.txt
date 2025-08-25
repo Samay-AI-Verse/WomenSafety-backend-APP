@@ -1,4 +1,5 @@
-fastapi
-uvicorn
-pymongo
-google-auth
+fastapi==0.115.0
+uvicorn==0.30.1
+pymongo==4.9.0
+google-auth==2.32.0
+requests==2.32.3
