@@ -1,8 +1,4 @@
 fastapi
 uvicorn
 pymongo
-requests
-python-dotenv
-PyJWT
-
-
+google-auth
